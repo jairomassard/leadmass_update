@@ -1483,17 +1483,8 @@ def delete_usuario():
 
 @app.route('/asignar-lead', methods=['POST'])
 def asignar_lead():
-    data = request.get_json() or {}
-    vendedor_id = data.get("vendedor_id")
-
-    if not vendedor_id:
-        return jsonify({"message": "vendedor_id es requerido"}), 400
-
-    try:
-        vendedor_id = int(vendedor_id)  # asegurar que sea número
-    except ValueError:
-        return jsonify({"message": "vendedor_id inválido"}), 400
-
+    data = request.get_json()
+    vendedor_id = data['vendedor_id']
 
     print(f"📌 Recibido POST en /asignar-lead con vendedor_id: {vendedor_id}")  # 👀 Log de entrada
 

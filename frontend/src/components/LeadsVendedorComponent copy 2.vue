@@ -361,7 +361,7 @@ export default {
     },
 
     consultarLeads() {
-      this.vendedorId = Number(localStorage.getItem("vendedor_actual"));
+      this.vendedorId = localStorage.getItem("vendedor_actual");
       if (!this.vendedorId) {
         console.warn("⚠️ vendedor_actual no disponible todavía. Reintentando...");
         setTimeout(this.consultarLeads, 500); // Reintenta en 0.5 seg

@@ -1,0 +1,45 @@
+# Ignorar entornos virtuales
+leadmass_virtual/
+venv/
+.env
+
+# Ignorar dependencias de Node.js
+frontend/node_modules/
+backend/__pycache__/
+
+# Archivos de compilación de Vue
+frontend/dist/
+# (la copia en backend/static/ SÍ debe subirse, porque Railway la sirve)
+
+# Archivos temporales / cache
+*.pyc
+*.pyo
+*.log
+__pycache__/
+.DS_Store
+
+# Configuración de IDE
+.vscode/
+.idea/
+
+
+# Ignorar credenciales y variables sensibles
+backend/credentials/
+*.env
+
+
+# Entornos virtuales
+venv/
+env/
+leadmass_virtual/
+__pycache__/
+*.pyc
+
+# Archivos sensibles
+*.env
+*.json
+backend/credentials/
+
+# Node
+node_modules/
+dist/

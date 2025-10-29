@@ -1,0 +1,3 @@
+nombres;apellidos;identificación;telefono/celular;dirección;ciudad;correo;fecha_lead;origen_lead;marca_de_interés;modelo_interesado;estatus;asignado;test_drive;habeas_data;tratamiento_datos
+nombres;apellidos;123456789;1234567890;Calle 1;Bogotá;nombres@example.com;AAAA-MM-DD;Evento;Subaru;Escribir modelo;nuevo;No;No;Si;Si
+;;;;;;;;;;;;;;;

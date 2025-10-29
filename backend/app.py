@@ -32,7 +32,7 @@ cached_token = None
 # Ahora puedes acceder a SENDGRID_API_KEY con os.environ
 SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY')
 
-app = Flask(__name__, static_folder="static/dist")
+app = Flask(__name__, static_folder="static")
 
 # Permitir solicitudes desde cualquier parte
 # CORS(app)
@@ -505,6 +505,11 @@ def serve(path):
         return send_from_directory(app.static_folder, path)
     else:
         return send_from_directory(app.static_folder, "index.html")
+    
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok"}), 200
+
 
 @app.route('/get-current-time', methods=['GET'])
 def get_current_time():

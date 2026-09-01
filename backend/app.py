@@ -180,6 +180,22 @@ def roles_required(*roles_permitidos):
     return decorator
 
 
+def api_token_required(f):
+    """
+    Para endpoints consumidos por integraciones externas (Zapier, etc.) que no
+    manejan cookies de sesión. Exige un token compartido, no un login de usuario.
+    Se envía como ?token=... o header X-Api-Token.
+    """
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        token_esperado = os.getenv("LEADS_API_TOKEN")
+        token_recibido = request.args.get("token") or request.headers.get("X-Api-Token")
+        if not token_esperado or token_recibido != token_esperado:
+            return jsonify({'message': 'No autorizado'}), 401
+        return f(*args, **kwargs)
+    return wrapper
+
+
 def obtener_concesionario_id_sesion():
     """ID del concesionario asignado al usuario en sesión (para acotar la vista de un supervisor)."""
     cursor.execute("SELECT concesionario FROM usuarios WHERE id = %s", (session.get('user_id'),))
@@ -3175,7 +3191,7 @@ def add_lead_test_drive():
 # Publicar último lead en el webhook o webservice
 # Publicar último lead en el webhook o webservice
 @app.route('/get-last-lead', methods=['GET'])
-@roles_required('administrador')
+@api_token_required
 def get_last_lead():
     """
     Obtiene el último lead capturado en la base de datos sin ciertos campos sensibles.

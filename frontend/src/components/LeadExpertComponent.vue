@@ -322,7 +322,7 @@
         this.resultadosRNE = response.data;
       } catch (error) {
         console.error("Error al consultar el RNE:", error);
-        alert("Hubo un problema al realizar la consulta. Intente nuevamente.");
+        alert(error.response?.data?.error || "Hubo un problema al realizar la consulta. Intente nuevamente.");
       } finally {
         this.loading = false; // Desactivar estado de carga
       }

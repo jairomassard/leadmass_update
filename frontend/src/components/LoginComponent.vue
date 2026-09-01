@@ -7,7 +7,7 @@
 
     <!-- Contenedor de inicio de sesión -->
     <div class="login-container">
-      <h1 class="text-center">LeadsMass Retail</h1>
+      <h1 class="text-center">LeadsMass</h1>
       <h3 class="text-center">Sistema de Manejo de Leads</h3>
       <h3 class="text-center mb-4"></h3>
 

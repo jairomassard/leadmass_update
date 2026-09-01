@@ -2444,25 +2444,33 @@ def consultar_rne():
         try:
             r = requests.post(url, json=payload, headers=headers, timeout=10)
             if r.status_code == 200:
-                return r.json()  # devuelve lista
+                return r.json(), None  # devuelve lista, sin error
             else:
                 print(f"⚠️ Error {r.status_code}: {r.text}")
-                return []
+                return [], f"El servicio RNE respondió con un error (HTTP {r.status_code}). Es posible que el token de acceso esté vencido; contacte al administrador."
         except Exception as e:
             print(f"Error en consulta RNE: {e}")
-            return []
+            return [], "No se pudo contactar el servicio RNE. Intente nuevamente más tarde."
 
     results = {"telefono": None, "correo": None}
+    error_rne = None
 
     # Consulta TEL
     if telefono:
-        tel_data = realizar_consulta({"type": "TEL", "keys": [telefono]})
+        tel_data, error_rne_tel = realizar_consulta({"type": "TEL", "keys": [telefono]})
         results["telefono"] = tel_data[0] if tel_data else None
+        error_rne = error_rne or error_rne_tel
 
     # Consulta COR
     if correo:
-        cor_data = realizar_consulta({"type": "COR", "keys": [correo]})
+        cor_data, error_rne_cor = realizar_consulta({"type": "COR", "keys": [correo]})
         results["correo"] = cor_data[0] if cor_data else None
+        error_rne = error_rne or error_rne_cor
+
+    # Si el RNE no respondió correctamente, no lo registramos como "no encontrado":
+    # avisamos del fallo real en vez de guardar un log engañoso.
+    if error_rne:
+        return jsonify({"error": error_rne}), 502
 
     # Preparar datos para auditoría en BD
     consulta_data = {
@@ -2657,26 +2665,33 @@ def consultar_rne_expert():
         try:
             response = requests.post(url, json=payload, headers=headers, timeout=10)
             if response.status_code == 200:
-                return response.json()
+                return response.json(), None
             else:
-                return None
+                print(f"⚠️ Error {response.status_code}: {response.text}")
+                return None, f"El servicio RNE respondió con un error (HTTP {response.status_code}). Es posible que el token de acceso esté vencido; contacte al administrador."
         except requests.exceptions.RequestException as e:
             print(f"Error al realizar la consulta: {e}")
-            return None
+            return None, "No se pudo contactar el servicio RNE. Intente nuevamente más tarde."
 
     results = {"telefono": None, "correo": None}
+    error_rne = None
 
     # Consultar por teléfono
     if telefono:
         payload_tel = {"type": "TEL", "keys": [telefono]}
-        data_tel = realizar_consulta(payload_tel)
+        data_tel, error_rne_tel = realizar_consulta(payload_tel)
         results["telefono"] = data_tel[0] if data_tel else None
+        error_rne = error_rne or error_rne_tel
 
     # Consultar por correo
     if correo:
         payload_correo = {"type": "COR", "keys": [correo]}
-        data_correo = realizar_consulta(payload_correo)
+        data_correo, error_rne_cor = realizar_consulta(payload_correo)
         results["correo"] = data_correo[0] if data_correo else None
+        error_rne = error_rne or error_rne_cor
+
+    if error_rne:
+        return jsonify({"error": error_rne}), 502
 
     # Devolver los resultados al cliente
     return jsonify(results)

@@ -462,7 +462,7 @@ export default {
         this.resultadosRNE = response.data;
       } catch (error) {
         console.error("Error al consultar el RNE:", error);
-        alert("Error al consultar el RNE.");
+        alert(error.response?.data?.error || "Error al consultar el RNE.");
       } finally {
         this.loading = false; // Desactivar indicador de carga
       }

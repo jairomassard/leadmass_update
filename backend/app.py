@@ -179,6 +179,19 @@ def roles_required(*roles_permitidos):
         return wrapper
     return decorator
 
+
+def obtener_concesionario_id_sesion():
+    """ID del concesionario asignado al usuario en sesión (para acotar la vista de un supervisor)."""
+    cursor.execute("SELECT concesionario FROM usuarios WHERE id = %s", (session.get('user_id'),))
+    fila = cursor.fetchone()
+    nombre_concesionario = fila[0] if fila else None
+    if not nombre_concesionario:
+        return None
+    cursor.execute("SELECT id FROM concesionarios WHERE nombre_concesionario = %s", (nombre_concesionario,))
+    fila = cursor.fetchone()
+    return fila[0] if fila else None
+
+
 # Asignar nuevo lead automatico
 def asignar_nuevo_lead_automatico(vendedor_id):
     print(f"🚀 Intentando asignar un nuevo lead al vendedor {vendedor_id}...")
@@ -712,7 +725,7 @@ def update_configuracion_general():
 
 # Ruta para agregar un lead dejando registro de auditoria
 @app.route('/add-lead', methods=['POST'])
-@login_required
+@roles_required('expert', 'administrador')
 def add_lead():
     data = request.json
 
@@ -845,7 +858,7 @@ def add_lead():
 
 # Ruta para obtener los leads
 @app.route('/get-leads', methods=['GET'])
-@login_required
+@roles_required('administrador')
 def get_leads():
     #cursor.execute("SELECT * FROM leads;")
     # Incluir el nuevo campo precio_venta al seleccionar leads
@@ -880,7 +893,7 @@ def get_leads():
 
 
 @app.route('/get-all-leads', methods=['GET'])
-@login_required
+@roles_required('administrador')
 def get_all_leads():
     vendedor_id = request.args.get('vendedor_id')
 
@@ -937,10 +950,14 @@ def get_all_leads():
     return jsonify(result), 200
 
 @app.route('/get-all-leads-supervisor', methods=['GET'])
-@login_required
+@roles_required('supervisor', 'administrador')
 def get_all_leads_supervisor():
-    # Obtener el usuario autenticado (simulado aquí con un parámetro para pruebas)
-    usuario_id = request.args.get('usuario_id')  # Debería ser el ID del usuario autenticado
+    # El supervisor solo puede consultar su propio concesionario; el admin puede
+    # consultar el de cualquier supervisor pasando usuario_id explícitamente.
+    if session.get('tipo_usuario') == 'supervisor':
+        usuario_id = session.get('user_id')
+    else:
+        usuario_id = request.args.get('usuario_id')
 
     if not usuario_id:
         return jsonify({"error": "ID de usuario no proporcionado"}), 400
@@ -1007,9 +1024,14 @@ def get_all_leads_supervisor():
 # Ruta para obtener los leads asignados al vendedor
 # Ruta para obtener los leads asignados al vendedor
 @app.route('/get-leads-vendedor', methods=['GET'])
-@login_required
+@roles_required('vendedor', 'administrador')
 def get_leads_vendedor():
-    vendedor_id = request.args.get('vendedor')
+    # El vendedor solo puede ver sus propios leads; el admin puede consultar
+    # los de cualquier vendedor pasando el parámetro explícitamente.
+    if session.get('tipo_usuario') == 'vendedor':
+        vendedor_id = session.get('user_id')
+    else:
+        vendedor_id = request.args.get('vendedor')
     print(f"🔎 ID de vendedor recibido: {vendedor_id}")
 
     if not vendedor_id:
@@ -1059,7 +1081,7 @@ def get_leads_vendedor():
 
 # Ruta para cargar leads desde un archivo CSV
 @app.route('/upload-leads', methods=['POST'])
-@login_required
+@roles_required('administrador')
 def upload_leads():
     try:
         file = request.files['file']
@@ -1228,6 +1250,12 @@ def update_lead():
 
         # Obtener el orden de las columnas en la tabla "leads"
         columnas = [desc[0] for desc in cursor.description]
+
+        # Un vendedor solo puede modificar leads que tiene asignados.
+        if session.get('tipo_usuario') == 'vendedor':
+            asignado_a_actual = lead_actual[columnas.index('asignado_a')]
+            if asignado_a_actual != session.get('user_id'):
+                return jsonify({"error": "No autorizado para modificar este lead"}), 403
 
         # Mantener los valores originales de `habeas_data` y `aceptacion_tratamiento_datos`
         if 'habeas_data' not in data:
@@ -1585,10 +1613,14 @@ def delete_usuario():
 
 
 @app.route('/asignar-lead', methods=['POST'])
-@login_required
+@roles_required('vendedor', 'administrador')
 def asignar_lead():
     data = request.get_json() or {}
-    vendedor_id = data.get("vendedor_id")
+    # El vendedor solo puede pedir un lead para sí mismo.
+    if session.get('tipo_usuario') == 'vendedor':
+        vendedor_id = session.get('user_id')
+    else:
+        vendedor_id = data.get("vendedor_id")
 
     if not vendedor_id:
         return jsonify({"message": "vendedor_id es requerido"}), 400
@@ -1795,10 +1827,11 @@ def asignar_lead():
 
 
 @app.route('/update-vendedor-estado', methods=['POST'])
-@login_required
+@roles_required('vendedor', 'administrador')
 def update_vendedor_estado():
     data = request.json
-    vendedor_id = data['vendedor_id']
+    # El vendedor solo puede cambiar su propio estado de conexión.
+    vendedor_id = session.get('user_id') if session.get('tipo_usuario') == 'vendedor' else data['vendedor_id']
     estado = data['estado']  # Recibe el estado como True para 'En línea' o False para 'Fuera de línea'
 
     # Actualizar el estado en la base de datos
@@ -1886,7 +1919,7 @@ def get_vendedores():
 
 # Ruta para exportar el reporte en PDF o CSV
 @app.route('/exportar-reporte', methods=['POST'])
-@login_required
+@roles_required('administrador', 'gerente', 'supervisor')
 def exportar_reporte():
 #    data = request.get_json()
 #    leads = data['leads']
@@ -1951,7 +1984,7 @@ def exportar_reporte():
 # Ruta para exportar el reporte en PDF o CSV
 # Ruta para exportar el reporte en PDF, CSV o Excel
 @app.route('/exportar-reporte-gerente', methods=['POST'])
-@login_required
+@roles_required('administrador', 'gerente', 'supervisor')
 def exportar_reporte_gerente():
     """
     Exportar reporte de leads en formato PDF, CSV o Excel.
@@ -2106,7 +2139,7 @@ def exportar_reporte_gerente():
 
 # Endpoint para eliminar un lead
 @app.route('/delete-lead', methods=['POST'])
-@login_required
+@roles_required('administrador', 'gerente', 'supervisor')
 def delete_lead():
     data = request.get_json()
     print("Datos recibidos para eliminación:", data)  # Depuración
@@ -2128,6 +2161,12 @@ def delete_lead():
 
         # Obtener los nombres de las columnas de la tabla "leads"
         columnas = [desc[0] for desc in cursor.description]
+
+        # Un supervisor solo puede eliminar leads de su propio concesionario.
+        if session.get('tipo_usuario') == 'supervisor':
+            concesionario_id = obtener_concesionario_id_sesion()
+            if not concesionario_id or lead[columnas.index('concesionario_id')] != concesionario_id:
+                return jsonify({"error": "No autorizado para eliminar este lead"}), 403
 
         # Crear una descripción detallada de los datos eliminados para la auditoría
         datos_eliminados = {columnas[i]: str(lead[i]) for i in range(len(columnas))}
@@ -2160,7 +2199,7 @@ def delete_lead():
 
 # Ruta para contar los leads capturados por el usuario Expert en la fecha actual
 @app.route('/count-leads-today', methods=['GET'])
-@login_required
+@roles_required('administrador')
 def count_leads_today():
     user_id = request.args.get('user_id')  # Obtener el ID del usuario desde el frontend
     today = get_current_time_colombia().date()  # Fecha actual
@@ -2175,9 +2214,12 @@ def count_leads_today():
 
 # Ruta para obtener el contador de leads capturados por un Expert en la fecha actual
 @app.route('/get-leads-count-expert', methods=['GET'])
-@login_required
+@roles_required('expert', 'administrador')
 def get_leads_count_expert():
-    user_id = request.args.get('user_id')
+    if session.get('tipo_usuario') == 'expert':
+        user_id = session.get('user_id')
+    else:
+        user_id = request.args.get('user_id')
 
     if not user_id:
         return jsonify({"error": "Falta el ID del usuario"}), 400
@@ -2209,7 +2251,7 @@ def get_leads_count_expert():
 
 # Envio de correso de prueba de correo gmail desde leadbridgesystem@gmail.com usando sendgrid
 @app.route('/test-email', methods=['POST'])
-@login_required
+@roles_required('administrador', 'vendedor')
 def test_email():
     """Endpoint para enviar un correo de prueba."""
     data = request.get_json()
@@ -2226,7 +2268,7 @@ def test_email():
 
 # Endpoint para probar el envío de notificaciones
 @app.route('/test-whatsapp-notification', methods=['POST'])
-@login_required
+@roles_required('administrador')
 def test_whatsapp_notification():
     data = request.get_json()
     telefono = data.get("telefono")
@@ -2268,7 +2310,7 @@ def estado_vendedores():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/get-usuarios-expert', methods=['GET'])
-@login_required
+@roles_required('administrador', 'gerente', 'supervisor')
 def get_usuarios_expert():
     # Selecciona usuarios de tipo "expert"
     cursor.execute("""
@@ -2282,7 +2324,7 @@ def get_usuarios_expert():
     return jsonify(expertos_list), 200
 
 @app.route('/leads-capturados-expert', methods=['GET'])
-@login_required
+@roles_required('administrador', 'gerente', 'supervisor')
 def leads_capturados_expert():
     expert_id = request.args.get('expert_id')
     fecha = request.args.get('fecha')
@@ -2328,7 +2370,7 @@ def leads_capturados_expert():
 
 
 @app.route('/consultar-rne', methods=['POST'])
-@login_required
+@roles_required('vendedor', 'administrador')
 def consultar_rne():
     """
     Endpoint para consultar el RNE y registrar los resultados en log_consultas_rne.
@@ -2426,7 +2468,7 @@ def consultar_rne():
 
 
 @app.route("/get-log-consultas-rne", methods=["GET"])
-@login_required
+@roles_required('administrador')
 def get_log_consultas_rne():
     vendedor_id = request.args.get("vendedor_id")
     fecha = request.args.get("fecha")
@@ -2486,7 +2528,7 @@ def get_log_consultas_rne():
     return jsonify(result)
 
 @app.route('/exportar-log-consultas-rne', methods=['GET'])
-@login_required
+@roles_required('administrador')
 def exportar_log_consultas_rne():
     vendedor_id = request.args.get("vendedor_id")
     fecha = request.args.get("fecha")
@@ -2545,7 +2587,7 @@ def exportar_log_consultas_rne():
     return response
 
 @app.route('/consultar-rne-expert', methods=['POST'])
-@login_required
+@roles_required('expert', 'administrador')
 def consultar_rne_expert():
     """
     Endpoint para consultar el RNE sin registrar los resultados en la base de datos.
@@ -2597,7 +2639,7 @@ def consultar_rne_expert():
 # ENPOINTS para la nueva pagina de gerente
 
 @app.route('/get-leads-concesionario', methods=['GET'])
-@login_required
+@roles_required('administrador', 'gerente', 'supervisor')
 def get_leads_concesionario():
     concesionario_id = request.args.get('concesionario_id')  # Filtro opcional por concesionario
     vendedor_id = request.args.get('vendedor_id')           # Filtro opcional por vendedor
@@ -2667,7 +2709,7 @@ def get_leads_concesionario():
 
 
 @app.route('/get-leads-gerente', methods=['GET'])
-@login_required
+@roles_required('administrador', 'gerente', 'supervisor')
 def get_leads_gerente():
     try:
         fecha_desde = request.args.get("fecha_desde")
@@ -2692,6 +2734,15 @@ def get_leads_gerente():
         if fecha_hasta:
             query += " AND l.fecha_lead <= %s"
             params.append(fecha_hasta)
+
+        # Un supervisor solo ve los leads de su propio concesionario; gerente y
+        # administrador conservan la vista de toda la compañía.
+        if session.get('tipo_usuario') == 'supervisor':
+            concesionario_id = obtener_concesionario_id_sesion()
+            if not concesionario_id:
+                return jsonify([]), 200
+            query += " AND l.concesionario_id = %s"
+            params.append(concesionario_id)
 
         query += " ORDER BY l.fecha_lead DESC"
 
@@ -2733,7 +2784,7 @@ def get_leads_gerente():
 
 
 @app.route('/get-concesionarios-con-leads', methods=['GET'])
-@login_required
+@roles_required('administrador', 'gerente', 'supervisor')
 def get_concesionarios_con_leads():
     try:
         query = """
@@ -2760,7 +2811,7 @@ def get_concesionarios_con_leads():
 
 
 @app.route('/update-lead-gerente', methods=['POST'])
-@login_required
+@roles_required('administrador', 'gerente', 'supervisor')
 def update_lead_gerente():
     data = request.json
     print(f"📥 (Gerente) Datos recibidos: {data}")
@@ -2777,6 +2828,12 @@ def update_lead_gerente():
             return jsonify({"error": "Lead no encontrado"}), 404
 
         columnas = [desc[0] for desc in cursor.description]
+
+        # Un supervisor solo puede modificar leads de su propio concesionario.
+        if session.get('tipo_usuario') == 'supervisor':
+            concesionario_id = obtener_concesionario_id_sesion()
+            if not concesionario_id or lead_actual[columnas.index('concesionario_id')] != concesionario_id:
+                return jsonify({"error": "No autorizado para modificar este lead"}), 403
 
         if 'habeas_data' not in data:
             data['habeas_data'] = lead_actual[columnas.index('habeas_data')]
@@ -2848,7 +2905,7 @@ def update_lead_gerente():
 
 
 @app.route('/auditoria', methods=['GET'])
-@login_required
+@roles_required('administrador')
 def consultar_auditoria():
     usuario_id = request.args.get('usuario_id')  # Filtrar por usuario que realizó la acción
     tabla_afectada = request.args.get('tabla_afectada')  # Filtrar por tabla afectada
@@ -2904,7 +2961,7 @@ def consultar_auditoria():
     return jsonify(result), 200
 
 @app.route('/auditoria', methods=['POST'])
-@login_required
+@roles_required('administrador')
 def registrar_auditoria():
     data = request.get_json()
 
@@ -2927,7 +2984,7 @@ def registrar_auditoria():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/get-logs', methods=['GET'])
-@login_required
+@roles_required('administrador')
 def get_logs():
     try:
         # Configurar la zona horaria a 'America/Bogota' después de la conexión
@@ -3118,7 +3175,7 @@ def add_lead_test_drive():
 # Publicar último lead en el webhook o webservice
 # Publicar último lead en el webhook o webservice
 @app.route('/get-last-lead', methods=['GET'])
-@login_required
+@roles_required('administrador')
 def get_last_lead():
     """
     Obtiene el último lead capturado en la base de datos sin ciertos campos sensibles.

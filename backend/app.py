@@ -754,6 +754,7 @@ def add_lead():
     try:
         #fecha_aceptacion = datetime.utcnow()
         fecha_aceptacion = get_current_time_colombia()
+        fecha_lead_valor = fecha_aceptacion.date()
 
         lead_values = (
             data['nombres'],
@@ -763,7 +764,7 @@ def add_lead():
             data['direccion'],
             data['ciudad'],
             data['correo'],
-            get_current_time_colombia().date(),
+            fecha_lead_valor,
             data['origen_lead'],
             data['marca_interes'],
             data['modelo_interesado'],
@@ -860,8 +861,17 @@ def add_lead():
         conn.commit()
         print("✅ Lead insertado con ID:", lead_id)
 
-        # 🔥 Llamar al webhook después de confirmar la inserción
-        enviar_webhook(data)
+        # 🔥 Llamar al webhook después de confirmar la inserción.
+        # Se completan campos que solo existen del lado del servidor (id, fechas,
+        # nombre del concesionario) y que nunca llegan en el body del request, para
+        # que Make/Zapier reciba el lead completo.
+        enviar_webhook({
+            **data,
+            "id": lead_id,
+            "fecha_lead": str(fecha_lead_valor),
+            "fecha_aceptacion": fecha_aceptacion.isoformat(),
+            "concesionario_nombre": concesionario_nombre,
+        })
 
         return jsonify({"message": "Lead agregado exitosamente"}), 200
 
@@ -3055,6 +3065,7 @@ def add_lead_test_drive():
         # Obtener la fecha en UTC
         #fecha_aceptacion = datetime.utcnow()
         fecha_aceptacion = get_current_time_colombia()
+        fecha_lead_valor = fecha_aceptacion.date()
 
         # Forzar precio_venta a 0 si no viene o viene vacío
         precio_venta = data.get('precio_venta', 0)
@@ -3070,7 +3081,7 @@ def add_lead_test_drive():
             data.get('direccion', None),
             ciudad_db,  # Ciudad corregida
             data['correo'],
-            get_current_time_colombia().date(),
+            fecha_lead_valor,
             data.get('origen_lead', 'Canal digital'),
             data['marca_interes'],
             data['modelo_interesado'],
@@ -3176,9 +3187,19 @@ def add_lead_test_drive():
         conn.commit()
         print("✅ Transacción confirmada en BD. Lead insertado con ID:", lead_id)
 
-         # 🔥 Llamar al webhook después de confirmar la inserción
-         # enviar_webhook(data)
-        enviar_webhook({**data, "precio_venta": precio_venta, "id": lead_id})
+        # 🔥 Llamar al webhook después de confirmar la inserción.
+        # Se completan campos que solo existen del lado del servidor (id, fechas,
+        # ciudad normalizada) y que nunca llegan en el body del request, para que
+        # Make/Zapier reciba el lead completo (antes faltaban fecha_lead y
+        # fecha_aceptacion en el payload).
+        enviar_webhook({
+            **data,
+            "precio_venta": precio_venta,
+            "id": lead_id,
+            "ciudad": ciudad_db,
+            "fecha_lead": str(fecha_lead_valor),
+            "fecha_aceptacion": fecha_aceptacion.isoformat(),
+        })
 
         return jsonify({"message": "Lead agregado exitosamente"}), 200
 

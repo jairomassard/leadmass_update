@@ -29,6 +29,8 @@
 </template>
 
 <script>
+import axios from '../axios';
+
 export default {
   name: 'DashboardLayout',
   props: {
@@ -39,9 +41,10 @@ export default {
   },
   methods: {
     logout() {
-      // Limpiar almacenamiento y redirigir al login
-      localStorage.clear();
-      this.$router.push('/');
+      axios.post('/logout').finally(() => {
+        localStorage.clear();
+        this.$router.push('/');
+      });
     },
   },
 };

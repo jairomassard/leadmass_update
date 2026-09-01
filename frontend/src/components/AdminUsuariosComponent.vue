@@ -28,7 +28,13 @@
             </div>
             <div class="col-md-4">
               <label for="password" class="form-label">Contraseña:</label>
-              <input type="password" v-model="usuarioActual.password" class="form-control" required>
+              <input
+                type="password"
+                v-model="usuarioActual.password"
+                class="form-control"
+                :placeholder="usuarioActual.id ? 'Dejar en blanco para no cambiarla' : ''"
+                :required="!usuarioActual.id"
+              >
             </div>
             <div class="col-md-4">
               <label for="tipo_usuario" class="form-label">Tipo de Usuario:</label>

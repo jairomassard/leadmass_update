@@ -24,10 +24,16 @@ export default {
     },
     logout() {
       const tipoUsuario = localStorage.getItem('tipo_usuario');
+      const finalizarSesion = () => {
+        axios.post('/logout').finally(() => {
+          localStorage.clear();
+          this.$router.push('/');
+        });
+      };
 
       if (tipoUsuario === 'vendedor') {
         const vendedorId = localStorage.getItem('vendedor_actual');
-        
+
         axios.post('/update-vendedor-estado', {
           vendedor_id: vendedorId,
           estado: false
@@ -37,11 +43,11 @@ export default {
         })
         .catch(error => {
           console.error("Error al marcar al vendedor como fuera de línea:", error);
-        });
+        })
+        .finally(finalizarSesion);
+      } else {
+        finalizarSesion();
       }
-
-      localStorage.removeItem('tipo_usuario');
-      this.$router.push('/');
     }
   }
 };

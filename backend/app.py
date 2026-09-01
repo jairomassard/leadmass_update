@@ -1,14 +1,15 @@
 import os
 import json
 import base64
-from flask import Flask, jsonify, request, send_from_directory
+from functools import wraps
+from flask import Flask, jsonify, request, send_from_directory, session
 from flask_cors import CORS
 import requests
 import threading
 import psycopg2
 import pandas as pd
 import pytz
-from datetime import datetime
+from datetime import datetime, timedelta
 from fpdf import FPDF
 from flask import make_response
 from email.mime.text import MIMEText
@@ -21,6 +22,7 @@ from sendgrid.helpers.mail import Mail, To
 from pytz import timezone
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from openpyxl import Workbook
+from werkzeug.security import generate_password_hash, check_password_hash
 
 
 # Cargar las variables del archivo .env
@@ -34,9 +36,26 @@ SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY')
 
 app = Flask(__name__, static_folder="static")
 
-# Permitir solicitudes desde cualquier parte
-# CORS(app)
-CORS(app, resources={r"/*": {"origins": "*"}})
+# Clave de sesión: obligatoria en producción para poder firmar la cookie de sesión.
+app.secret_key = os.getenv("SECRET_KEY", "dev-only-insecure-key-change-me")
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
+)
+
+# Orígenes permitidos para CORS con credenciales (cookies de sesión).
+# En producción el frontend se sirve desde el mismo dominio, así que esto
+# cubre sobre todo el entorno de desarrollo local (vue-cli-service serve).
+_cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:8080,http://localhost:8081,https://leadmass.up.railway.app",
+    ).split(",")
+    if origin.strip()
+]
+CORS(app, resources={r"/*": {"origins": _cors_origins}}, supports_credentials=True)
 
 
 conn = psycopg2.connect(
@@ -95,23 +114,70 @@ def get_current_time_colombia():
     colombia_tz = timezone("America/Bogota")
     return datetime.now(colombia_tz)
 
-# Función para obtener usuario por nombre y contraseña
+def _password_esta_hasheada(password_almacenada):
+    """Las contraseñas hasheadas con werkzeug empiezan con un prefijo de método conocido."""
+    return isinstance(password_almacenada, str) and password_almacenada.startswith(
+        ("pbkdf2:", "scrypt:")
+    )
+
+
+# Función para obtener usuario por nombre y contraseña.
+# Verifica contra hash (werkzeug) y, si la contraseña en BD todavía está en texto
+# plano (usuarios creados antes de la migración a hashing), valida por comparación
+# directa y de inmediato re-guarda la contraseña ya hasheada.
 def obtener_usuario(usuario, password):
-    query = "SELECT * FROM usuarios WHERE usuario = %s AND password = %s"
-    cursor.execute(query, (usuario, password))
+    query = "SELECT * FROM usuarios WHERE usuario = %s"
+    cursor.execute(query, (usuario,))
     user = cursor.fetchone()
-    if user:
-        return {
-            'id': user[0],
-            'usuario': user[1],
-            'password': user[2],
-            'concesionario': user[3],
-            'es_administrador': user[4],
-            'tipo_usuario': user[5],
-            'fecha_creacion': user[6],
-            'activo': user[7]
-        }
-    return None
+    if not user:
+        return None
+
+    password_almacenada = user[2]
+    if _password_esta_hasheada(password_almacenada):
+        if not check_password_hash(password_almacenada, password):
+            return None
+    else:
+        if password_almacenada != password:
+            return None
+        # Migración perezosa: contraseña válida en texto plano -> se hashea ahora.
+        nuevo_hash = generate_password_hash(password)
+        cursor.execute("UPDATE usuarios SET password = %s WHERE id = %s", (nuevo_hash, user[0]))
+        conn.commit()
+
+    return {
+        'id': user[0],
+        'usuario': user[1],
+        'password': password_almacenada,
+        'concesionario': user[3],
+        'es_administrador': user[4],
+        'tipo_usuario': user[5],
+        'fecha_creacion': user[6],
+        'activo': user[7],
+        'nombres': user[8] if len(user) > 8 else '',
+        'apellidos': user[9] if len(user) > 9 else '',
+    }
+
+
+def login_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if 'user_id' not in session:
+            return jsonify({'message': 'No autenticado'}), 401
+        return f(*args, **kwargs)
+    return wrapper
+
+
+def roles_required(*roles_permitidos):
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            if 'user_id' not in session:
+                return jsonify({'message': 'No autenticado'}), 401
+            if session.get('tipo_usuario') not in roles_permitidos:
+                return jsonify({'message': 'No autorizado'}), 403
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
 
 # Asignar nuevo lead automatico
 def asignar_nuevo_lead_automatico(vendedor_id):
@@ -520,18 +586,6 @@ def get_current_time():
         "datetime": current_time.strftime("%Y-%m-%d %H:%M:%S")  # También puedes incluir la hora completa si es necesario
     })
 
-@app.route("/debug-db")
-def debug_db():
-    cursor.execute("SELECT current_database(), current_user, inet_server_addr(), inet_server_port();")
-    info = cursor.fetchone()
-    return jsonify({
-        "database": info[0],  # Nombre de la base de datos
-        "user": info[1],      # Usuario conectado
-        "host": info[2],      # Dirección IP del servidor
-        "port": info[3],      # Puerto de conexión
-    })
-
-
 # Ruta para login
 @app.route('/login', methods=['POST'])
 def login():
@@ -548,6 +602,12 @@ def login():
             (get_current_time_colombia(), user['id'])
         )
         conn.commit()
+
+        # Sesión de servidor: de esto depende @login_required / @roles_required.
+        session.clear()
+        session.permanent = True
+        session['user_id'] = user['id']
+        session['tipo_usuario'] = user['tipo_usuario']
 
         # Base de la respuesta
         base_response = {
@@ -567,9 +627,15 @@ def login():
     else:
         return jsonify({'message': 'Credenciales incorrectas'}), 401
 
-        
+
+@app.route('/logout', methods=['POST'])
+def logout():
+    session.clear()
+    return jsonify({'message': 'Sesión cerrada'}), 200
+
 
 @app.route('/get-configuracion-general', methods=['GET'])
+@roles_required('administrador')
 def get_configuracion_general():
     """Obtiene la configuración general incluyendo los webhooks."""
     try:
@@ -606,6 +672,7 @@ def get_configuracion_general():
 
 
 @app.route('/update-configuracion-general', methods=['POST'])
+@roles_required('administrador')
 def update_configuracion_general():
     """Actualiza la configuración general, incluyendo los webhooks."""
     data = request.json
@@ -645,6 +712,7 @@ def update_configuracion_general():
 
 # Ruta para agregar un lead dejando registro de auditoria
 @app.route('/add-lead', methods=['POST'])
+@login_required
 def add_lead():
     data = request.json
 
@@ -777,6 +845,7 @@ def add_lead():
 
 # Ruta para obtener los leads
 @app.route('/get-leads', methods=['GET'])
+@login_required
 def get_leads():
     #cursor.execute("SELECT * FROM leads;")
     # Incluir el nuevo campo precio_venta al seleccionar leads
@@ -811,6 +880,7 @@ def get_leads():
 
 
 @app.route('/get-all-leads', methods=['GET'])
+@login_required
 def get_all_leads():
     vendedor_id = request.args.get('vendedor_id')
 
@@ -867,6 +937,7 @@ def get_all_leads():
     return jsonify(result), 200
 
 @app.route('/get-all-leads-supervisor', methods=['GET'])
+@login_required
 def get_all_leads_supervisor():
     # Obtener el usuario autenticado (simulado aquí con un parámetro para pruebas)
     usuario_id = request.args.get('usuario_id')  # Debería ser el ID del usuario autenticado
@@ -936,6 +1007,7 @@ def get_all_leads_supervisor():
 # Ruta para obtener los leads asignados al vendedor
 # Ruta para obtener los leads asignados al vendedor
 @app.route('/get-leads-vendedor', methods=['GET'])
+@login_required
 def get_leads_vendedor():
     vendedor_id = request.args.get('vendedor')
     print(f"🔎 ID de vendedor recibido: {vendedor_id}")
@@ -987,6 +1059,7 @@ def get_leads_vendedor():
 
 # Ruta para cargar leads desde un archivo CSV
 @app.route('/upload-leads', methods=['POST'])
+@login_required
 def upload_leads():
     try:
         file = request.files['file']
@@ -1132,6 +1205,7 @@ def upload_leads():
 # Ruta para actualizar un lead
 # Ruta para actualizar un lead
 @app.route('/update-lead', methods=['POST'])
+@login_required
 def update_lead():
     data = request.json
     print(f"📥 Datos recibidos en el backend: {data}")  # 🚀 Agrega este print
@@ -1256,14 +1330,17 @@ def update_lead():
 
 # Ruta para obtener la información del usuario logueado
 @app.route('/user-info', methods=['GET'])
+@login_required
 def user_info():
-    user_data = {
-        'es_administrador': True
-    }
-    return jsonify(user_data), 200
+    return jsonify({
+        'id': session.get('user_id'),
+        'tipo_usuario': session.get('tipo_usuario'),
+        'es_administrador': session.get('tipo_usuario') == 'administrador',
+    }), 200
 
 # Ruta para obtener concesionarios
 @app.route('/get-concesionarios', methods=['GET'])
+@login_required
 def get_concesionarios():
     cursor.execute("SELECT id, nombre_concesionario, ciudad, marcas FROM concesionarios")
     concesionarios = cursor.fetchall()
@@ -1288,6 +1365,7 @@ def get_concesionarios():
 
 # Ruta para agregar concesionario
 @app.route('/add-concesionario', methods=['POST'])
+@roles_required('administrador')
 def add_concesionario():
     try:
         data = request.json
@@ -1313,6 +1391,7 @@ def add_concesionario():
 
 # Ruta para actualizar concesionario
 @app.route('/update-concesionario', methods=['POST'])
+@roles_required('administrador')
 def update_concesionario():
     data = request.json
     cur = conn.cursor()
@@ -1326,6 +1405,7 @@ def update_concesionario():
 
 # Ruta para eliminar un concesionario
 @app.route('/delete-concesionario', methods=['POST'])
+@roles_required('administrador')
 def delete_concesionario():
     try:
         data = request.json
@@ -1369,11 +1449,12 @@ def delete_concesionario():
 
 # Ruta para agregar un usuario
 @app.route('/add-usuario', methods=['POST'])
+@roles_required('administrador')
 def add_usuario():
     try:
         data = request.json
         usuario = data['usuario']
-        password = data['password']
+        password = generate_password_hash(data['password'])
         concesionario = data['concesionario']
         tipo_usuario = data['tipo_usuario']
         nombres = data['nombres']
@@ -1398,33 +1479,54 @@ def add_usuario():
 
 # Ruta para actualizar un usuario
 @app.route('/update-usuario', methods=['POST'])
+@roles_required('administrador')
 def update_usuario():
     try:
         data = request.json
         es_administrador = data['tipo_usuario'] == 'administrador'
-    
-        query = """
-            UPDATE usuarios
-            SET usuario = %s, password = %s, concesionario = %s, 
-                es_administrador = %s, tipo_usuario = %s, activo = %s,
-                nombres = %s, apellidos = %s, celular = %s, correo = %s, marca_asignada = %s
-            WHERE id = %s
-        """
-        values = (
-            data['usuario'], data['password'], data['concesionario'], 
-            es_administrador, data['tipo_usuario'], data['activo'], 
-            data['nombres'], data['apellidos'], data.get('celular', ''), 
-            data.get('correo', ''), data.get('marca_asignada', ''), data['id']
-        )
-        cursor.execute(query, values)
+
+        # El frontend reenvía el usuario tal cual lo recibió de /get-usuarios
+        # (que ya no incluye password) al editar o cambiar el estado activo/inactivo.
+        # Solo tocamos la contraseña si el admin escribió una nueva.
+        nueva_password = (data.get('password') or '').strip()
+
+        if nueva_password:
+            cursor.execute("""
+                UPDATE usuarios
+                SET usuario = %s, password = %s, concesionario = %s,
+                    es_administrador = %s, tipo_usuario = %s, activo = %s,
+                    nombres = %s, apellidos = %s, celular = %s, correo = %s, marca_asignada = %s
+                WHERE id = %s
+            """, (
+                data['usuario'], generate_password_hash(nueva_password), data['concesionario'],
+                es_administrador, data['tipo_usuario'], data['activo'],
+                data['nombres'], data['apellidos'], data.get('celular', ''),
+                data.get('correo', ''), data.get('marca_asignada', ''), data['id']
+            ))
+        else:
+            cursor.execute("""
+                UPDATE usuarios
+                SET usuario = %s, concesionario = %s,
+                    es_administrador = %s, tipo_usuario = %s, activo = %s,
+                    nombres = %s, apellidos = %s, celular = %s, correo = %s, marca_asignada = %s
+                WHERE id = %s
+            """, (
+                data['usuario'], data['concesionario'],
+                es_administrador, data['tipo_usuario'], data['activo'],
+                data['nombres'], data['apellidos'], data.get('celular', ''),
+                data.get('correo', ''), data.get('marca_asignada', ''), data['id']
+            ))
+
         conn.commit()
         return jsonify({"message": "Usuario actualizado exitosamente"}), 200
     except Exception as e:
+        conn.rollback()
         print(f"Error al actualizar usuario: {e}")
         return jsonify({"error": str(e)}), 500
 
 # Ruta para obtener usuarios
 @app.route('/get-usuarios', methods=['GET'])
+@roles_required('administrador')
 def get_usuarios():
     cursor.execute("SELECT * FROM usuarios;")
     usuarios = cursor.fetchall()
@@ -1434,7 +1536,7 @@ def get_usuarios():
         usuarios_list.append({
             "id": user[0],
             "usuario": user[1],
-            "password": user[2],
+            # No se devuelve la contraseña (ni siquiera hasheada) al cliente.
             "concesionario": user[3] if len(user) > 3 else "",
             "es_administrador": user[4] if len(user) > 4 else False,
             "tipo_usuario": user[5] if len(user) > 5 else "vendedor",
@@ -1454,6 +1556,7 @@ def get_usuarios():
 
 # Ruta para eliminar un usuario
 @app.route('/delete-usuario', methods=['POST'])
+@roles_required('administrador')
 def delete_usuario():
     try:
         data = request.json
@@ -1482,6 +1585,7 @@ def delete_usuario():
 
 
 @app.route('/asignar-lead', methods=['POST'])
+@login_required
 def asignar_lead():
     data = request.get_json() or {}
     vendedor_id = data.get("vendedor_id")
@@ -1691,6 +1795,7 @@ def asignar_lead():
 
 
 @app.route('/update-vendedor-estado', methods=['POST'])
+@login_required
 def update_vendedor_estado():
     data = request.json
     vendedor_id = data['vendedor_id']
@@ -1743,6 +1848,7 @@ def update_vendedor_estado():
         return jsonify({"message": "Estado del vendedor actualizado exitosamente"}), 200
 
 @app.route('/tiempo-ultima-conexion', methods=['GET'])
+@login_required
 def tiempo_ultima_conexion():
     vendedor_id = request.args.get('vendedor')
 
@@ -1769,6 +1875,7 @@ def tiempo_ultima_conexion():
 
 
 @app.route('/get-vendedores', methods=['GET'])
+@login_required
 def get_vendedores():
     cursor.execute("SELECT id, nombres, apellidos FROM usuarios WHERE tipo_usuario = 'vendedor'")
     vendedores = cursor.fetchall()
@@ -1779,6 +1886,7 @@ def get_vendedores():
 
 # Ruta para exportar el reporte en PDF o CSV
 @app.route('/exportar-reporte', methods=['POST'])
+@login_required
 def exportar_reporte():
 #    data = request.get_json()
 #    leads = data['leads']
@@ -1843,6 +1951,7 @@ def exportar_reporte():
 # Ruta para exportar el reporte en PDF o CSV
 # Ruta para exportar el reporte en PDF, CSV o Excel
 @app.route('/exportar-reporte-gerente', methods=['POST'])
+@login_required
 def exportar_reporte_gerente():
     """
     Exportar reporte de leads en formato PDF, CSV o Excel.
@@ -1997,6 +2106,7 @@ def exportar_reporte_gerente():
 
 # Endpoint para eliminar un lead
 @app.route('/delete-lead', methods=['POST'])
+@login_required
 def delete_lead():
     data = request.get_json()
     print("Datos recibidos para eliminación:", data)  # Depuración
@@ -2050,6 +2160,7 @@ def delete_lead():
 
 # Ruta para contar los leads capturados por el usuario Expert en la fecha actual
 @app.route('/count-leads-today', methods=['GET'])
+@login_required
 def count_leads_today():
     user_id = request.args.get('user_id')  # Obtener el ID del usuario desde el frontend
     today = get_current_time_colombia().date()  # Fecha actual
@@ -2064,6 +2175,7 @@ def count_leads_today():
 
 # Ruta para obtener el contador de leads capturados por un Expert en la fecha actual
 @app.route('/get-leads-count-expert', methods=['GET'])
+@login_required
 def get_leads_count_expert():
     user_id = request.args.get('user_id')
 
@@ -2097,6 +2209,7 @@ def get_leads_count_expert():
 
 # Envio de correso de prueba de correo gmail desde leadbridgesystem@gmail.com usando sendgrid
 @app.route('/test-email', methods=['POST'])
+@login_required
 def test_email():
     """Endpoint para enviar un correo de prueba."""
     data = request.get_json()
@@ -2113,6 +2226,7 @@ def test_email():
 
 # Endpoint para probar el envío de notificaciones
 @app.route('/test-whatsapp-notification', methods=['POST'])
+@login_required
 def test_whatsapp_notification():
     data = request.get_json()
     telefono = data.get("telefono")
@@ -2128,6 +2242,7 @@ def test_whatsapp_notification():
 
 # Endpoint para consultar estado de conexión  de un vendedor
 @app.route('/estado-vendedores', methods=['GET'])
+@login_required
 def estado_vendedores():
     try:
         # Consultar el estado de los vendedores en la tabla de usuarios
@@ -2153,6 +2268,7 @@ def estado_vendedores():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/get-usuarios-expert', methods=['GET'])
+@login_required
 def get_usuarios_expert():
     # Selecciona usuarios de tipo "expert"
     cursor.execute("""
@@ -2166,6 +2282,7 @@ def get_usuarios_expert():
     return jsonify(expertos_list), 200
 
 @app.route('/leads-capturados-expert', methods=['GET'])
+@login_required
 def leads_capturados_expert():
     expert_id = request.args.get('expert_id')
     fecha = request.args.get('fecha')
@@ -2211,6 +2328,7 @@ def leads_capturados_expert():
 
 
 @app.route('/consultar-rne', methods=['POST'])
+@login_required
 def consultar_rne():
     """
     Endpoint para consultar el RNE y registrar los resultados en log_consultas_rne.
@@ -2308,6 +2426,7 @@ def consultar_rne():
 
 
 @app.route("/get-log-consultas-rne", methods=["GET"])
+@login_required
 def get_log_consultas_rne():
     vendedor_id = request.args.get("vendedor_id")
     fecha = request.args.get("fecha")
@@ -2367,6 +2486,7 @@ def get_log_consultas_rne():
     return jsonify(result)
 
 @app.route('/exportar-log-consultas-rne', methods=['GET'])
+@login_required
 def exportar_log_consultas_rne():
     vendedor_id = request.args.get("vendedor_id")
     fecha = request.args.get("fecha")
@@ -2425,6 +2545,7 @@ def exportar_log_consultas_rne():
     return response
 
 @app.route('/consultar-rne-expert', methods=['POST'])
+@login_required
 def consultar_rne_expert():
     """
     Endpoint para consultar el RNE sin registrar los resultados en la base de datos.
@@ -2476,6 +2597,7 @@ def consultar_rne_expert():
 # ENPOINTS para la nueva pagina de gerente
 
 @app.route('/get-leads-concesionario', methods=['GET'])
+@login_required
 def get_leads_concesionario():
     concesionario_id = request.args.get('concesionario_id')  # Filtro opcional por concesionario
     vendedor_id = request.args.get('vendedor_id')           # Filtro opcional por vendedor
@@ -2545,6 +2667,7 @@ def get_leads_concesionario():
 
 
 @app.route('/get-leads-gerente', methods=['GET'])
+@login_required
 def get_leads_gerente():
     try:
         fecha_desde = request.args.get("fecha_desde")
@@ -2610,6 +2733,7 @@ def get_leads_gerente():
 
 
 @app.route('/get-concesionarios-con-leads', methods=['GET'])
+@login_required
 def get_concesionarios_con_leads():
     try:
         query = """
@@ -2636,6 +2760,7 @@ def get_concesionarios_con_leads():
 
 
 @app.route('/update-lead-gerente', methods=['POST'])
+@login_required
 def update_lead_gerente():
     data = request.json
     print(f"📥 (Gerente) Datos recibidos: {data}")
@@ -2723,6 +2848,7 @@ def update_lead_gerente():
 
 
 @app.route('/auditoria', methods=['GET'])
+@login_required
 def consultar_auditoria():
     usuario_id = request.args.get('usuario_id')  # Filtrar por usuario que realizó la acción
     tabla_afectada = request.args.get('tabla_afectada')  # Filtrar por tabla afectada
@@ -2778,6 +2904,7 @@ def consultar_auditoria():
     return jsonify(result), 200
 
 @app.route('/auditoria', methods=['POST'])
+@login_required
 def registrar_auditoria():
     data = request.get_json()
 
@@ -2800,6 +2927,7 @@ def registrar_auditoria():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/get-logs', methods=['GET'])
+@login_required
 def get_logs():
     try:
         # Configurar la zona horaria a 'America/Bogota' después de la conexión
@@ -2990,6 +3118,7 @@ def add_lead_test_drive():
 # Publicar último lead en el webhook o webservice
 # Publicar último lead en el webhook o webservice
 @app.route('/get-last-lead', methods=['GET'])
+@login_required
 def get_last_lead():
     """
     Obtiene el último lead capturado en la base de datos sin ciertos campos sensibles.

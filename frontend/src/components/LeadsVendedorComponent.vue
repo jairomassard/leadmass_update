@@ -146,9 +146,10 @@
       <!-- Botones de edición y consulta -->
       <div class="text-center mt-4">
           <!-- Botón "Consultar RNE" -->
-          <button 
-              @click="consultarRNE" 
-              :disabled="loading" 
+          <button
+              v-if="mostrarBotonRNE"
+              @click="consultarRNE"
+              :disabled="loading"
               :class="['btn', loading ? 'btn-secondary' : 'btn-info']"
           >
               <span v-if="loading">
@@ -258,6 +259,7 @@ export default {
       totalTestDrive: 0,
       enLinea: false,
       vendedorId: null,
+      mostrarBotonRNE: true, // Se ajusta según Parametrización General
 
       // Variables de filtro
       filtroEstatus: "",
@@ -436,6 +438,15 @@ export default {
       this.leadActual = this.leadsFiltrados[this.currentIndex] || null;
     },
 
+    cargarFeatureFlags() {
+      axios.get('/get-feature-flags')
+        .then(response => {
+          this.mostrarBotonRNE = response.data.habilitar_consulta_rne;
+        })
+        .catch(error => {
+          console.error("Error al cargar las banderas de funcionalidad:", error);
+        });
+    },
     async consultarRNE() {
       if (!this.leadActual) return;
       const { telefono, correo } = this.leadActual;
@@ -609,6 +620,7 @@ export default {
 
     this.consultarLeads();
     this.cargarConcesionarios();  // 🚀 Cargar lista de concesionarios al inicio
+    this.cargarFeatureFlags();
     window.addEventListener("beforeunload", this.marcarFueraDeLinea);
     this.iniciarPing();  // Inicia el "ping"
   },

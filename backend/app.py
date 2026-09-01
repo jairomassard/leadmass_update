@@ -669,8 +669,8 @@ def get_configuracion_general():
     """Obtiene la configuración general incluyendo los webhooks."""
     try:
         cursor.execute("""
-            SELECT enviar_correo, destinatarios, webhook_interno, webhook_make, webhook_zapier, habilitar_webhook
-            FROM configuracion_general 
+            SELECT enviar_correo, destinatarios, webhook_interno, webhook_make, webhook_zapier, habilitar_webhook, habilitar_consulta_rne
+            FROM configuracion_general
             LIMIT 1
         """)
         configuracion = cursor.fetchone()
@@ -682,7 +682,8 @@ def get_configuracion_general():
                 "webhook_interno": configuracion[2] or "",  # Si es NULL, se devuelve vacío
                 "webhook_make": configuracion[3] or "",
                 "webhook_zapier": configuracion[4] or "",
-                "habilitar_webhook": configuracion[5]
+                "habilitar_webhook": configuracion[5],
+                "habilitar_consulta_rne": configuracion[6]
             }), 200
         else:
             return jsonify({
@@ -691,13 +692,28 @@ def get_configuracion_general():
                 "webhook_interno": "",
                 "webhook_make": "",
                 "webhook_zapier": "",
-                "habilitar_webhook": False
+                "habilitar_webhook": False,
+                "habilitar_consulta_rne": True
             }), 200
 
     except Exception as e:
         print(f"Error al obtener la configuración general: {e}")
         return jsonify({"error": "Error al obtener la configuración general."}), 500
 
+
+@app.route('/get-feature-flags', methods=['GET'])
+@login_required
+def get_feature_flags():
+    """Banderas de funcionalidad de solo lectura, visibles para cualquier usuario logueado."""
+    try:
+        cursor.execute("SELECT habilitar_consulta_rne FROM configuracion_general LIMIT 1")
+        fila = cursor.fetchone()
+        return jsonify({
+            "habilitar_consulta_rne": fila[0] if fila else True
+        }), 200
+    except Exception as e:
+        print(f"Error al obtener las banderas de funcionalidad: {e}")
+        return jsonify({"habilitar_consulta_rne": True}), 200
 
 
 @app.route('/update-configuracion-general', methods=['POST'])
@@ -713,20 +729,23 @@ def update_configuracion_general():
         if existe:
             cursor.execute("""
                 UPDATE configuracion_general
-                SET enviar_correo = %s, destinatarios = %s, 
-                    webhook_interno = %s, webhook_make = %s, webhook_zapier = %s, habilitar_webhook = %s
+                SET enviar_correo = %s, destinatarios = %s,
+                    webhook_interno = %s, webhook_make = %s, webhook_zapier = %s, habilitar_webhook = %s,
+                    habilitar_consulta_rne = %s
                 WHERE id = 1
             """, (
                 data['enviar_correo'], data['destinatarios'],
-                data['webhook_interno'], data['webhook_make'], data['webhook_zapier'], data['habilitar_webhook']
+                data['webhook_interno'], data['webhook_make'], data['webhook_zapier'], data['habilitar_webhook'],
+                data.get('habilitar_consulta_rne', True)
             ))
         else:
             cursor.execute("""
-                INSERT INTO configuracion_general (enviar_correo, destinatarios, webhook_interno, webhook_make, webhook_zapier, habilitar_webhook)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO configuracion_general (enviar_correo, destinatarios, webhook_interno, webhook_make, webhook_zapier, habilitar_webhook, habilitar_consulta_rne)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (
                 data['enviar_correo'], data['destinatarios'],
-                data['webhook_interno'], data['webhook_make'], data['webhook_zapier'], data['habilitar_webhook']
+                data['webhook_interno'], data['webhook_make'], data['webhook_zapier'], data['habilitar_webhook'],
+                data.get('habilitar_consulta_rne', True)
             ))
 
         conn.commit()

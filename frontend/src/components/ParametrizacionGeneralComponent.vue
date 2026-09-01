@@ -58,6 +58,19 @@
         </div>
       </div>
 
+      <!-- Checkbox para habilitar el botón Consultar RNE -->
+      <div class="form-check mb-3">
+        <input
+          class="form-check-input"
+          type="checkbox"
+          id="habilitarConsultaRne"
+          v-model="configuracion.habilitar_consulta_rne"
+        />
+        <label class="form-check-label" for="habilitarConsultaRne">
+          Habilitar botón "Consultar RNE" (Expert y Vendedor)
+        </label>
+      </div>
+
       <!-- Botón para guardar cambios -->
       <div class="text-center">
         <button @click="guardarConfiguracion" class="btn btn-primary">Guardar Configuración</button>
@@ -78,7 +91,8 @@ export default {
         habilitar_webhook: false,
         webhook_interno: "",
         webhook_make: "",
-        webhook_zapier: ""
+        webhook_zapier: "",
+        habilitar_consulta_rne: true
       }
     };
   },

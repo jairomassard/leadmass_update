@@ -131,6 +131,7 @@
           </div>
           <!-- Botón de Consulta RNE -->
           <button
+            v-if="mostrarBotonRNE"
             @click="consultarRNE"
             :disabled="loading"
             :class="['btn', loading ? 'btn-secondary' : 'btn-warning']"
@@ -268,13 +269,15 @@
       ctx: null, // Contexto del canvas
       lastPos: { x: 0, y: 0 }, // Última posición del puntero
       resultadosRNE: null,
-      loading: false // Controla el estado de carga del botón
+      loading: false, // Controla el estado de carga del botón
+      mostrarBotonRNE: true // Se ajusta según Parametrización General
     };
   },
   mounted() {
     this.contarLeadsHoy();
     this.inicializarFirma(); // Inicializa el canvas para la firma
     this.cargarConcesionarios(); // Cargar concesionarios al cargar el componente
+    this.cargarFeatureFlags();
   },
   computed: {
     modelosFiltrados() {
@@ -293,6 +296,15 @@
     },
     marcarVisitaEnlace() {
         this.enlaceVisitado = true; // Se marca como visitado cuando hace clic
+    },
+    cargarFeatureFlags() {
+      axios.get('/get-feature-flags')
+        .then(response => {
+          this.mostrarBotonRNE = response.data.habilitar_consulta_rne;
+        })
+        .catch(error => {
+          console.error("Error al cargar las banderas de funcionalidad:", error);
+        });
     },
     async consultarRNE() {
       const { telefono, correo } = this.lead;

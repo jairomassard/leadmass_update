@@ -24,8 +24,8 @@ import VendedorDashboard from '../components/VendedorDashboard.vue';
 const routes = [
   { path: '/', name: 'Login', component: LoginComponent },
 
-  // 🔹 RUTA PÚBLICA para formulario de Test Drive
-  { path: '/test-drive-form', name: 'PublicTestDrive', component: TestDriveForm },
+  // 🔹 RUTA PÚBLICA para formulario de captura de leads
+  { path: '/capture-form', name: 'PublicTestDrive', component: TestDriveForm },
 
   // Admin
   {
